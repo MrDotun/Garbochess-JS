@@ -10,6 +10,9 @@ var g_analyzing = false;
 var g_uiBoard;
 var g_cellSize = 45;
 
+// Added for click-to-move and highlight tracking
+var g_selectedSquare = null;
+
 function UINewGame() {
     moveNumber = 1;
 
@@ -95,8 +98,22 @@ function FinishMove(bestMove, value, timeTaken, ply) {
     if (bestMove != null) {
         UIPlayMove(bestMove, BuildPVMessage(bestMove, value, timeTaken, ply));
     } else {
-        alert("Checkmate!");
+        CheckGameEnd();
     }
+}
+
+// Added function to announce game end state
+function CheckGameEnd() {
+    var moves = GenerateValidMoves();
+    if (moves.length === 0) {
+        if (g_inCheck) {
+            alert("Checkmate! Game Over.");
+        } else {
+            alert("Stalemate! Game is a draw.");
+        }
+        return true;
+    }
+    return false;
 }
 
 function UIPlayMove(move, pv) {
@@ -106,8 +123,10 @@ function UIPlayMove(move, pv) {
     MakeMove(move);
 
     UpdatePVDisplay(pv);
-
     UpdateFromMove(move);
+    
+    // Check for checkmate after AI move
+    setTimeout(CheckGameEnd, 100);
 }
 
 function UIUndoMove() {
@@ -222,7 +241,8 @@ function RedrawPieces() {
         for (x = 0; x < 8; ++x) {
             var td = g_uiBoard[y * 8 + x];
             var pieceY = g_playerWhite ? y : 7 - y;
-            var piece = g_board[((pieceY + 2) * 0x10) + (g_playerWhite ? x : 7 - x) + 4];
+            var pieceX = g_playerWhite ? x : 7 - x;
+            var piece = g_board[((pieceY + 2) * 0x10) + pieceX + 4];
             var pieceName = null;
             switch (piece & 0x7) {
                 case piecePawn: pieceName = "pawn"; break;
@@ -246,35 +266,7 @@ function RedrawPieces() {
                 var divimg = document.createElement("div");
                 divimg.appendChild(img);
 
-                $(divimg).draggable({ start: function (e, ui) {
-                    if (g_selectedPiece === null) {
-                        g_selectedPiece = this;
-                        var offset = $(this).closest('table').offset();
-                        g_startOffset = {
-                            left: e.pageX - offset.left,
-                            top: e.pageY - offset.top
-                        };
-                    } else {
-                        return g_selectedPiece == this;
-                    }
-                }});
-
-                $(divimg).mousedown(function(e) {
-                    if (g_selectedPiece === null) {
-                        var offset = $(this).closest('table').offset();
-                        g_startOffset = {
-                            left: e.pageX - offset.left,
-                            top: e.pageY - offset.top
-                        };
-                        e.stopPropagation();
-                        g_selectedPiece = this;
-                        g_selectedPiece.style.backgroundImage = "url('img/transpBlue50.png')";
-                    } else if (g_selectedPiece === this) {
-                        g_selectedPiece.style.backgroundImage = null;
-                        g_selectedPiece = null;
-                    }
-                });
-
+                // Structures for click-to-move interaction are handled in RedrawBoard
                 $(td).empty().append(divimg);
             } else {
                 $(td).empty();
@@ -294,92 +286,85 @@ function RedrawBoard() {
     var tbody = document.createElement("tbody");
 
     g_uiBoard = [];
+    g_selectedSquare = null;
 
-    var dropPiece = function (e, ui) {
-        var endX = e.pageX - $(table).offset().left;
-        var endY = e.pageY - $(table).offset().top;
+    var onSquareClick = function(x, y) {
+        if (g_selectedSquare === null) {
+            // First click: Selection
+            var boardX = g_playerWhite ? x : 7 - x;
+            var boardY = g_playerWhite ? y : 7 - y;
+            var piece = g_board[((boardY + 2) * 0x10) + boardX + 4];
 
-        endX = Math.floor(endX / g_cellSize);
-        endY = Math.floor(endY / g_cellSize);
-
-        var startX = Math.floor(g_startOffset.left / g_cellSize);
-        var startY = Math.floor(g_startOffset.top / g_cellSize);
-
-        if (!g_playerWhite) {
-            startY = 7 - startY;
-            endY = 7 - endY;
-            startX = 7 - startX;
-            endX = 7 - endX;
-        }
-
-        var moves = GenerateValidMoves();
-        var move = null;
-        for (var i = 0; i < moves.length; i++) {
-            if ((moves[i] & 0xFF) == MakeSquare(startY, startX) &&
-                ((moves[i] >> 8) & 0xFF) == MakeSquare(endY, endX)) {
-                move = moves[i];
+            if (piece !== 0) { 
+                g_selectedSquare = { x: x, y: y };
+                // Highlight selection square
+                g_uiBoard[y * 8 + x].style.backgroundColor = "#7b917b";
             }
-        }
-
-        if (!g_playerWhite) {
-            startY = 7 - startY;
-            endY = 7 - endY;
-            startX = 7 - startX;
-            endX = 7 - endX;
-        }
-
-        g_selectedPiece.style.left = 0;
-        g_selectedPiece.style.top = 0;
-
-        if (!(startX == endX && startY == endY) && move != null) {
-            UpdatePgnTextBox(move);
-
-            if (InitializeBackgroundEngine()) {
-                g_backgroundEngine.postMessage(FormatMove(move));
-            }
-
-            g_allMoves[g_allMoves.length] = move;
-            MakeMove(move);
-
-            UpdateFromMove(move);
-
-            g_selectedPiece.style.backgroundImage = null;
-            g_selectedPiece = null;
-
-            var fen = GetFen();
-            document.getElementById("FenTextBox").value = fen;
-
-            setTimeout("SearchAndRedraw()", 0);
         } else {
-            g_selectedPiece.style.backgroundImage = null;
-            g_selectedPiece = null;
+            // Second click: Execute Move
+            var startX = g_selectedSquare.x;
+            var startY = g_selectedSquare.y;
+            
+            // Restore original square color
+            g_uiBoard[startY * 8 + startX].style.backgroundColor = ((startY ^ startX) & 1) ? "#D18947" : "#FFCE9E";
+
+            var logicStartX = g_playerWhite ? startX : 7 - startX;
+            var logicStartY = g_playerWhite ? startY : 7 - startY;
+            var logicEndX = g_playerWhite ? x : 7 - x;
+            var logicEndY = g_playerWhite ? y : 7 - y;
+
+            var moves = GenerateValidMoves();
+            var move = null;
+            for (var i = 0; i < moves.length; i++) {
+                if ((moves[i] & 0xFF) == MakeSquare(logicStartY, logicStartX) &&
+                    ((moves[i] >> 8) & 0xFF) == MakeSquare(logicEndY, logicEndX)) {
+                    move = moves[i];
+                    break;
+                }
+            }
+
+            if (!(startX === x && startY === y)) {
+                if (move != null) {
+                    UpdatePgnTextBox(move);
+                    if (InitializeBackgroundEngine()) {
+                        g_backgroundEngine.postMessage(FormatMove(move));
+                    }
+                    g_allMoves[g_allMoves.length] = move;
+                    MakeMove(move);
+                    UpdateFromMove(move);
+                    
+                    document.getElementById("FenTextBox").value = GetFen();
+                    
+                    if (!CheckGameEnd()) {
+                        setTimeout("SearchAndRedraw()", 100);
+                    }
+                } else {
+                    alert("Illegal move!");
+                }
+            }
+            g_selectedSquare = null;
         }
     };
 
-    for (y = 0; y < 8; ++y) {
+    for (var y = 0; y < 8; ++y) {
         var tr = document.createElement("tr");
-
-        for (x = 0; x < 8; ++x) {
+        for (var x = 0; x < 8; ++x) {
             var td = document.createElement("td");
             td.style.width = g_cellSize + "px";
             td.style.height = g_cellSize + "px";
             td.style.backgroundColor = ((y ^ x) & 1) ? "#D18947" : "#FFCE9E";
+            
+            (function(currX, currY, cell) {
+                $(cell).click(function() { onSquareClick(currX, currY); });
+            })(x, y, td);
+
             tr.appendChild(td);
             g_uiBoard[y * 8 + x] = td;
         }
-
         tbody.appendChild(tr);
     }
 
     table.appendChild(tbody);
-
-    $('body').droppable({ drop: dropPiece });
-    $(table).mousedown(function(e) {
-        if (g_selectedPiece !== null) {
-            dropPiece(e);
-        }
-    });
-
     RedrawPieces();
 
     $(div).empty();
